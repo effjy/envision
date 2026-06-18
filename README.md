@@ -1,4 +1,8 @@
-# Envision
+<div align="center">
+
+<a href="https://github.com/effjy/envision/"><img src="titles/envision-title.svg" height="52" alt="Envision"></a>
+
+</div>
 
 <p align="center">
   <img src="icons/envision.svg" alt="Envision logo" width="128" height="128">
