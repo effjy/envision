@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1565c0"/>
+      <stop offset="1" stop-color="#0d2b52"/>
+    </linearGradient>
+    <radialGradient id="eye" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#e3f2fd"/>
+      <stop offset="1" stop-color="#64b5f6"/>
+    </radialGradient>
+  </defs>
+  <!-- Shield -->
+  <path d="M128 16 L220 52 V128 C220 188 178 226 128 244
+           C78 226 36 188 36 128 V52 Z"
+        fill="url(#bg)" stroke="#0a1f3d" stroke-width="6"/>
+  <!-- Eye (vision / envision) -->
+  <path d="M64 128 C90 92 166 92 192 128 C166 164 90 164 64 128 Z"
+        fill="#0a1f3d" opacity="0.55"/>
+  <path d="M70 128 C94 98 162 98 186 128 C162 158 94 158 70 128 Z"
+        fill="#ffffff"/>
+  <circle cx="128" cy="128" r="26" fill="url(#eye)" stroke="#0d47a1" stroke-width="4"/>
+  <circle cx="128" cy="128" r="11" fill="#0d2b52"/>
+  <circle cx="120" cy="120" r="5" fill="#ffffff"/>
+  <!-- Check mark of approval -->
+  <path d="M104 176 l16 18 l40 -44" fill="none" stroke="#43a047"
+        stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
