@@ -1,0 +1,35 @@
+#!/bin/sh
+# Envision launcher: elevate with pkexec while preserving the X11 / Wayland
+# environment so the GTK GUI can connect to the user's display.
+#
+# If already root, just run the binary directly.
+if [ "$(id -u)" = "0" ]; then
+    exec /usr/bin/envision "$@"
+fi
+
+# Allow the root process to talk to the user's X server for this session.
+if command -v xhost >/dev/null 2>&1; then
+    xhost +SI:localuser:root >/dev/null 2>&1
+fi
+
+# Build the list of variables to forward, but ONLY include those that are
+# actually set. Passing an empty value (e.g. GDK_BACKEND=) is harmful: GTK
+# treats an empty GDK_BACKEND as "no backend allowed" and then fails with
+# "cannot open display", which is exactly the bug this avoids.
+set --
+for var in DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR \
+           XDG_SESSION_TYPE GDK_BACKEND; do
+    eval "val=\${$var}"
+    [ -n "$val" ] && set -- "$@" "$var=$val"
+done
+
+# Fall back to the conventional cookie location if XAUTHORITY is unset.
+if [ -z "${XAUTHORITY}" ] && [ -f "$HOME/.Xauthority" ]; then
+    set -- "$@" "XAUTHORITY=$HOME/.Xauthority"
+fi
+
+# Remember who launched us and where their home is, so the elevated process can
+# default the "Save report" dialog to the real user's home instead of /root.
+set -- "$@" "ENVISION_ORIG_HOME=$HOME" "ENVISION_ORIG_USER=$(id -un)"
+
+exec pkexec env "$@" /usr/bin/envision
