@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Envision
+GenericName=System Security Scanner
+Comment=Scan your system's security posture and get hardening suggestions
+Exec=envision-launcher
+Icon=envision
+Terminal=false
+Categories=System;Security;Settings;Utility;
+Keywords=security;hardening;audit;scan;firewall;
+StartupNotify=true
