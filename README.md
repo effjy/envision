@@ -1,4 +1,4 @@
-<div alignt="center">
+<div align="center">
 <a href="https://github.com/effjy/envision/"><img src="titles/envision-title.svg" height="52" alt="Envision"></a>
 </div>
 <p align="center">
