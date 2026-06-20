@@ -1,5 +1,5 @@
 # Envision — Makefile
-# Builds the GTK3 binary and installs it together with its icon, desktop
+# Builds the GTK4 C++ binary and installs it together with its icon, desktop
 # entry, polkit policy and launcher so it appears in the application menu
 # and the window/taskbar.
 
@@ -12,14 +12,14 @@ POLKITDIR  := $(DATADIR)/polkit-1/actions
 ICONBASE   := $(DATADIR)/icons/hicolor
 ICON_SIZES := 16 22 24 32 48 64 128 256
 
-CC         ?= cc
-PKG        := gtk+-3.0
-CFLAGS     ?= -O2 -Wall -Wextra
-CFLAGS     += $(shell pkg-config --cflags $(PKG))
+CXX        ?= g++
+PKG        := gtk4
+CXXFLAGS   ?= -O2 -Wall -Wextra -std=c++17
+CXXFLAGS   += $(shell pkg-config --cflags $(PKG))
 LDLIBS     := $(shell pkg-config --libs $(PKG)) -lpthread
 
-SRC        := $(wildcard src/*.c)
-OBJ        := $(SRC:.c=.o)
+SRC        := $(wildcard src/*.cpp)
+OBJ        := $(SRC:.cpp=.o)
 
 # Tools used to rasterize the SVG icon (first one found wins).
 RSVG       := $(shell command -v rsvg-convert 2>/dev/null)
@@ -31,10 +31,10 @@ CONVERT    := $(shell command -v convert 2>/dev/null)
 all: $(PROG)
 
 $(PROG): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
-src/%.o: src/%.c src/scan.h
-	$(CC) $(CFLAGS) -c $< -o $@
+src/%.o: src/%.cpp src/scan.hpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 run: $(PROG)
 	./$(PROG)

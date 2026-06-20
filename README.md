@@ -1,8 +1,4 @@
-<div align="center">
-
-<a href="https://github.com/effjy/envision/"><img src="titles/envision-title.svg" height="52" alt="Envision"></a>
-
-</div>
+# Envision
 
 <p align="center">
   <img src="icons/envision.svg" alt="Envision logo" width="128" height="128">
@@ -10,13 +6,14 @@
 
 <p align="center">
   <strong>See your system the way an attacker would — then fix it.</strong><br>
-  A GTK3 desktop security‑posture scanner for Linux that audits your machine
+  A GTK4 desktop security‑posture scanner for Linux that audits your machine
   and produces an actionable hardening report with copy‑paste fix commands.
 </p>
 
 <p align="center">
-  <img alt="Language: C" src="https://img.shields.io/badge/language-C-blue.svg">
-  <img alt="Toolkit: GTK3" src="https://img.shields.io/badge/toolkit-GTK%2B3-7c3aed.svg">
+  <img alt="Language: C++" src="https://img.shields.io/badge/language-C%2B%2B-blue.svg">
+  <img alt="Toolkit: GTK4" src="https://img.shields.io/badge/toolkit-GTK4-7c3aed.svg">
+  <img alt="Version: 1.0.1" src="https://img.shields.io/badge/version-1.0.1-blue.svg">
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-333.svg">
   <img alt="Privilege: pkexec" src="https://img.shields.io/badge/runs%20as-root%20via%20pkexec-c62828.svg">
   <img alt="Export: PDF" src="https://img.shields.io/badge/export-PDF%20(pdflatex)-008080.svg">
@@ -65,7 +62,7 @@ Each finding carries:
 | **Services** | Failed `systemd` units |
 
 The check set is intentionally extensible — new checks are a single function in
-`src/scan.c`. Even on a clean system, Envision keeps checking for the *bad*
+`src/scan.cpp`. Even on a clean system, Envision keeps checking for the *bad*
 cases (e.g. a process that later opens a public port), so re‑scans stay
 meaningful.
 
@@ -96,7 +93,7 @@ alarmed by, say, your browser doing QUIC.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libgtk-3-dev \
+sudo apt-get install -y build-essential pkg-config libgtk-4-dev \
     policykit-1 iproute2 librsvg2-bin
 # For PDF export:
 sudo apt-get install -y texlive-latex-base texlive-latex-extra
@@ -105,7 +102,7 @@ sudo apt-get install -y texlive-latex-base texlive-latex-extra
 **Fedora / RHEL:**
 
 ```bash
-sudo dnf install -y gcc make pkgconf-pkg-config gtk3-devel polkit \
+sudo dnf install -y gcc-c++ make pkgconf-pkg-config gtk4-devel polkit \
     iproute librsvg2-tools
 sudo dnf install -y texlive-scheme-basic texlive-tcolorbox texlive-geometry
 ```
@@ -113,13 +110,13 @@ sudo dnf install -y texlive-scheme-basic texlive-tcolorbox texlive-geometry
 **Arch:**
 
 ```bash
-sudo pacman -S --needed base-devel gtk3 polkit iproute2 librsvg \
+sudo pacman -S --needed base-devel gtk4 polkit iproute2 librsvg \
     texlive-basic texlive-latexextra
 ```
 
 | Dependency | Why |
 | --- | --- |
-| `gtk+-3.0` | the graphical interface |
+| `gtk4` | the graphical interface |
 | `polkit` / `pkexec` | privilege elevation to run as root |
 | `iproute2` (`ss`) | listening‑socket enumeration |
 | `pdflatex` (texlive) | PDF report export (uses `tcolorbox`, `geometry`, `xcolor`) |
@@ -212,10 +209,10 @@ session and forwards `DISPLAY`, `XAUTHORITY`, `WAYLAND_DISPLAY` and
 ```
 envision/
 ├── src/
-│   ├── scan.h        # data model (Finding, ScanReport, Severity)
-│   ├── scan.c        # the scan engine and every individual check
-│   ├── report.c      # text + LaTeX rendering and pdflatex invocation
-│   └── main.c        # GTK3 UI, threaded scan, CLI mode, About dialog
+│   ├── scan.hpp      # data model (Finding, ScanReport, Severity)
+│   ├── scan.cpp      # the scan engine and every individual check
+│   ├── report.cpp    # text + LaTeX rendering and pdflatex invocation
+│   └── main.cpp      # GTK4 UI (GtkApplication), threaded scan, CLI mode, About dialog
 ├── icons/envision.svg
 ├── desktop/envision.desktop
 ├── desktop/envision-launcher
@@ -227,7 +224,7 @@ envision/
 ## Extending
 
 Add a new check by writing a `static void check_xxx(ScanReport *r)` function in
-`src/scan.c` that calls `add_finding(...)`, then add it to the `checks[]` array
+`src/scan.cpp` that calls `add_finding(...)`, then add it to the `checks[]` array
 in `scan_run()`. It will automatically appear in the UI, the text report and
 the PDF. Future ideas: AppArmor/SELinux enforcement, listening‑port → process
 reputation, password‑policy (`pam`) audit, mount options (`nodev`/`nosuid`),
