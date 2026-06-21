@@ -323,6 +323,22 @@ static void check_ssh(ScanReport *r) {
                     "sudo sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' "
                     "/etc/ssh/sshd_config && sudo systemctl restart ssh");
     }
+    if (g_strstr_len(low, -1, "permitemptypasswords yes")) {
+        add_finding(r, "SSH", "SSH permits empty passwords", SEV_CRITICAL,
+                    "PermitEmptyPasswords is enabled — an account with a blank "
+                    "password could be logged into over the network.",
+                    "Never allow empty-password SSH logins.",
+                    "sudo sed -i 's/^#\\?PermitEmptyPasswords.*/PermitEmptyPasswords no/' "
+                    "/etc/ssh/sshd_config && sudo systemctl restart ssh");
+    }
+    if (g_strstr_len(low, -1, "x11forwarding yes")) {
+        add_finding(r, "SSH", "SSH X11 forwarding enabled", SEV_LOW,
+                    "X11Forwarding is enabled.",
+                    "Disable X11 forwarding unless you genuinely need it; it widens "
+                    "the trust boundary between the server and connecting clients.",
+                    "sudo sed -i 's/^#\\?X11Forwarding.*/X11Forwarding no/' "
+                    "/etc/ssh/sshd_config && sudo systemctl restart ssh");
+    }
     g_free(low);
 }
 
@@ -939,6 +955,223 @@ static void check_tmp_hardening(ScanReport *r) {
     g_free(s);
 }
 
+/* Additional kernel-hardening sysctls beyond the core set in
+ * check_kernel_hardening(). Individually each is a minor information leak or
+ * stack-hardening gap; together they meaningfully shrink local attack surface.
+ * Reported LOW so they never drown out the higher-severity findings. */
+static void check_kernel_hardening_extra(ScanReport *r) {
+    struct { const char *key; const char *want; gboolean atleast; const char *label; const char *why; } params[] = {
+        { "kernel.dmesg_restrict", "1", TRUE, "dmesg_restrict",
+          "Restricting dmesg keeps kernel addresses/log data away from unprivileged users." },
+        { "kernel.yama.ptrace_scope", "1", TRUE, "ptrace_scope",
+          "Limiting ptrace stops one of your processes reading another's memory (credential theft)." },
+        { "kernel.kexec_load_disabled", "1", TRUE, "kexec_load_disabled",
+          "Disabling kexec prevents booting an unverified kernel at runtime, which would bypass Secure Boot." },
+        { "kernel.unprivileged_bpf_disabled", "1", TRUE, "unprivileged_bpf_disabled",
+          "Blocking unprivileged BPF removes a large and historically buggy kernel attack surface." },
+        { "kernel.sysrq", "0", FALSE, "sysrq",
+          "The magic SysRq key allows low-level actions from an attached keyboard; disable it unless you rely on it." },
+        { "fs.protected_hardlinks", "1", TRUE, "protected_hardlinks",
+          "Blocks hardlink-based race attacks in world-writable directories such as /tmp." },
+        { "fs.protected_symlinks", "1", TRUE, "protected_symlinks",
+          "Blocks symlink-following attacks in world-writable directories such as /tmp." },
+        { "net.ipv4.conf.all.send_redirects", "0", FALSE, "send_redirects",
+          "A host (non-router) should never send ICMP redirects." },
+        { "net.ipv4.conf.all.accept_source_route", "0", FALSE, "accept_source_route",
+          "Source-routed packets are a spoofing/route-bypass vector and should be dropped." },
+        { "net.ipv4.conf.all.log_martians", "1", TRUE, "log_martians",
+          "Logging martian packets records spoofed/impossible source addresses for later investigation." },
+    };
+    for (size_t i = 0; i < G_N_ELEMENTS(params); i++) {
+        char cmd[160];
+        g_snprintf(cmd, sizeof cmd, "sysctl -n %s 2>/dev/null", params[i].key);
+        char *out = run_cmd(cmd);
+        char *v = chomp_dup(out); g_free(out);
+        if (!v || !*v) { g_free(v); continue; } /* key not present on this kernel */
+        gboolean ok = params[i].atleast ? (atoi(v) >= atoi(params[i].want))
+                                        : g_str_equal(v, params[i].want);
+        if (!ok) {
+            char d[384], fix[256], title[128];
+            g_snprintf(title, sizeof title, "Kernel param %s = %s (want %s)",
+                       params[i].label, v, params[i].want);
+            g_snprintf(d, sizeof d, "%s is %s; recommended %s. %s",
+                       params[i].key, v, params[i].want, params[i].why);
+            g_snprintf(fix, sizeof fix,
+                       "echo '%s = %s' | sudo tee -a /etc/sysctl.d/99-envision.conf "
+                       "&& sudo sysctl --system", params[i].key, params[i].want);
+            add_finding(r, "Kernel", title, SEV_LOW, d, params[i].why, fix);
+        }
+        g_free(v);
+    }
+}
+
+/* A GRUB superuser password stops someone at the console from editing a boot
+ * entry (e.g. appending init=/bin/bash) to get a root shell with no login. */
+static void check_grub_password(ScanReport *r) {
+    if (!g_file_test("/boot/grub/grub.cfg", G_FILE_TEST_EXISTS) &&
+        !g_file_test("/boot/grub2/grub.cfg", G_FILE_TEST_EXISTS))
+        return; /* not a GRUB system (e.g. systemd-boot) */
+    char *out = run_cmd("grep -rhsE '^[[:space:]]*password(_pbkdf2)?[[:space:]]' "
+                        "/etc/grub.d /boot/grub/grub.cfg /boot/grub2/grub.cfg "
+                        "2>/dev/null");
+    char *s = chomp_dup(out); g_free(out);
+    if (s && *s) {
+        add_finding(r, "Boot", "GRUB bootloader password set", SEV_OK,
+                    "A GRUB superuser password is configured.", "", NULL);
+    } else {
+        add_finding(r, "Boot", "No GRUB bootloader password", SEV_LOW,
+                    "GRUB has no superuser password, so anyone at the console can "
+                    "edit a boot entry and the kernel command line.",
+                    "Set a GRUB password so boot parameters cannot be altered to "
+                    "bypass authentication (e.g. booting straight to a root shell). "
+                    "Less critical when the disk is encrypted, but still recommended "
+                    "for a machine others can physically reach.",
+                    "grub-mkpasswd-pbkdf2   # then add 'set superusers' / "
+                    "'password_pbkdf2' to /etc/grub.d/40_custom and run "
+                    "'sudo update-grub'");
+    }
+    g_free(s);
+}
+
+/* /dev/shm and /var/tmp are world-writable like /tmp and are equally good spots
+ * to drop and execute malware, so they deserve the same noexec,nosuid,nodev.
+ * (check_tmp_hardening already covers /tmp itself.) */
+static void check_extra_mount_hardening(ScanReport *r) {
+    const char *mounts[] = { "/dev/shm", "/var/tmp" };
+    for (size_t i = 0; i < G_N_ELEMENTS(mounts); i++) {
+        char cmd[128];
+        g_snprintf(cmd, sizeof cmd, "findmnt -no OPTIONS %s 2>/dev/null", mounts[i]);
+        char *out = run_cmd(cmd);
+        char *s = chomp_dup(out); g_free(out);
+        if (!s || !*s) { g_free(s); continue; } /* not a separate mount */
+        gboolean noexec = g_strstr_len(s, -1, "noexec") != NULL;
+        gboolean nosuid = g_strstr_len(s, -1, "nosuid") != NULL;
+        if (noexec && nosuid) {
+            char t[64];
+            g_snprintf(t, sizeof t, "%s mounted with noexec,nosuid", mounts[i]);
+            add_finding(r, "Filesystem", t, SEV_OK,
+                        "Hardened against executing dropped files.", "", NULL);
+        } else {
+            char t[64], d[256], fix[256];
+            g_snprintf(t, sizeof t, "%s missing noexec/nosuid", mounts[i]);
+            g_snprintf(d, sizeof d, "%s options: %s", mounts[i], s);
+            g_snprintf(fix, sizeof fix,
+                       "sudo mount -o remount,noexec,nosuid,nodev %s   # and update "
+                       "/etc/fstab to persist", mounts[i]);
+            add_finding(r, "Filesystem", t, SEV_LOW, d,
+                        "Add noexec,nosuid,nodev to this world-writable mount so "
+                        "that malware dropped here cannot be executed directly.",
+                        fix);
+        }
+        g_free(s);
+    }
+}
+
+/* Loose permissions on the credential/policy files below would let any local
+ * user read password hashes or tamper with trusted configuration. */
+static void check_sensitive_file_perms(ScanReport *r) {
+    struct { const char *path; int max; } files[] = {
+        { "/etc/shadow",  0640 }, { "/etc/gshadow", 0640 },
+        { "/etc/passwd",  0644 }, { "/etc/group",   0644 },
+        { "/etc/sudoers", 0440 },
+    };
+    GString *bad = g_string_new(NULL);
+    for (size_t i = 0; i < G_N_ELEMENTS(files); i++) {
+        GStatBuf st;
+        if (g_stat(files[i].path, &st) != 0) continue;
+        int mode = st.st_mode & 07777;
+        /* Any permission bit set beyond the allowed mask is too permissive. */
+        if (mode & ~files[i].max)
+            g_string_append_printf(bad,
+                "  %s is %04o (should be %04o or stricter)\n",
+                files[i].path, mode, files[i].max);
+    }
+    if (bad->len) {
+        add_finding(r, "Filesystem",
+                    "Over-permissive permissions on sensitive files", SEV_HIGH,
+                    bad->str,
+                    "These files hold credentials or trusted configuration; loose "
+                    "permissions let a local user read password hashes or alter "
+                    "policy. Restore the recommended modes.",
+                    "sudo chmod 640 /etc/shadow /etc/gshadow && "
+                    "sudo chmod 644 /etc/passwd /etc/group && "
+                    "sudo chmod 440 /etc/sudoers");
+    } else {
+        add_finding(r, "Filesystem", "Sensitive file permissions OK", SEV_OK,
+                    "Credential and policy files have safe permissions.", "", NULL);
+    }
+    g_string_free(bad, TRUE);
+}
+
+/* Files owned by a UID/GID with no matching account usually remain from a
+ * deleted user. They are a tidiness/forensics problem and become a real risk if
+ * that numeric ID is later reused — a new user would silently inherit them. */
+static void check_unowned_files(ScanReport *r) {
+    char *out = run_cmd("find / -xdev \\( -nouser -o -nogroup \\) "
+                        "-not -path '/proc/*' 2>/dev/null | head -20");
+    char *s = chomp_dup(out); g_free(out);
+    if (s && *s) {
+        add_finding(r, "Filesystem", "Files with no owner (unowned)", SEV_LOW, s,
+                    "These files belong to a user or group that no longer exists. "
+                    "Review them and either delete or re-assign ownership; "
+                    "otherwise a future account created with the same numeric ID "
+                    "would inherit them.",
+                    "sudo chown root:root <path>   # or remove if not needed");
+    } else {
+        add_finding(r, "Filesystem", "No unowned files", SEV_OK,
+                    "Every file maps to a valid user and group.", "", NULL);
+    }
+    g_free(s);
+}
+
+/* Locking an account after repeated failed logins slows password guessing.
+ * On modern Linux this is pam_faillock (older systems used pam_tally2). */
+static void check_account_lockout(ScanReport *r) {
+    char *out = run_cmd("grep -rslE 'pam_faillock|pam_tally2?' /etc/pam.d 2>/dev/null");
+    char *s = chomp_dup(out); g_free(out);
+    if (s && *s) {
+        add_finding(r, "Accounts", "Account-lockout policy configured", SEV_OK,
+                    "pam_faillock/pam_tally is present in the PAM stack.", "", NULL);
+    } else {
+        add_finding(r, "Accounts", "No account-lockout policy (pam_faillock)",
+                    SEV_LOW,
+                    "No PAM module locks an account after repeated failed logins, "
+                    "so password guessing is unthrottled.",
+                    "Configure pam_faillock so that repeated wrong passwords "
+                    "temporarily lock the account. This is most valuable where "
+                    "logins are network-reachable (SSH, a display manager).",
+                    "sudo pam-auth-update   # enable faillock, then tune "
+                    "/etc/security/faillock.conf");
+    }
+    g_free(s);
+}
+
+/* Cleartext / legacy network services (telnet, rsh, FTP, TFTP, NIS, finger)
+ * transmit credentials in the clear or have a long history of remote exploits.
+ * Their mere presence on a host is worth flagging. */
+static void check_legacy_services(ScanReport *r) {
+    char *out = run_cmd(
+        "dpkg -l 2>/dev/null | awk '/^ii/{print $2}' | sed 's/:.*//' | grep -xE "
+        "'(telnetd|telnet-server|inetutils-telnetd|krb5-telnetd|rsh-server|"
+        "rsh-redone-server|vsftpd|proftpd-basic|pure-ftpd|tftpd|tftpd-hpa|"
+        "atftpd|nis|ypserv|finger|fingerd|talkd|xinetd|openbsd-inetd)' "
+        "| tr '\\n' ' '");
+    char *s = chomp_dup(out); g_free(out);
+    if (s && *s) {
+        add_finding(r, "Services", "Legacy/insecure network services installed",
+                    SEV_MEDIUM, s,
+                    "These services send credentials in cleartext or have a poor "
+                    "security history. Remove any you are not deliberately using; "
+                    "prefer SSH/SFTP over telnet/rsh/FTP.",
+                    "sudo apt-get purge <package>");
+    } else {
+        add_finding(r, "Services", "No legacy insecure services installed", SEV_OK,
+                    "No telnet/rsh/FTP/TFTP/NIS-style packages were found.", "",
+                    NULL);
+    }
+    g_free(s);
+}
+
 /* ------------------------------------------------------------------ */
 /* Orchestration                                                       */
 /* ------------------------------------------------------------------ */
@@ -977,21 +1210,28 @@ ScanReport *scan_run(ScanProgressFn progress, gpointer user_data) {
         { "Filesystem (world-writable)", check_world_writable },
         { "Filesystem (SUID)", check_suid },
         { "Kernel",    check_kernel_hardening },
+        { "Kernel (extra)", check_kernel_hardening_extra },
         { "Storage",   check_disk_encryption },
         { "Services",  check_aslr_services },
         { "Core dumps",check_coredumps },
         { "Access control", check_mac },
         { "Intrusion prevention", check_intrusion_prevention },
+        { "Account lockout", check_account_lockout },
         { "Malware tooling", check_malware_tools },
         { "Audit logging", check_auditd },
         { "Time sync", check_time_sync },
         { "Password policy", check_password_policy },
         { "Autologin", check_autologin },
         { "Scheduled tasks", check_cron },
+        { "Legacy services", check_legacy_services },
         { "Containers", check_docker },
         { "Reboot required", check_reboot_required },
         { "Secure Boot", check_secure_boot },
+        { "GRUB password", check_grub_password },
         { "/tmp hardening", check_tmp_hardening },
+        { "Mount hardening", check_extra_mount_hardening },
+        { "File permissions", check_sensitive_file_perms },
+        { "Unowned files", check_unowned_files },
     };
     int total = G_N_ELEMENTS(checks);
     for (int i = 0; i < total; i++) {
