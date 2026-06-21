@@ -1,6 +1,5 @@
-<div align="center">
-<a href="https://github.com/effjy/envision/"><img src="titles/envision-title.svg" height="52" alt="Envision"></a>
-</div>
+# Envision
+
 <p align="center">
   <img src="icons/envision.svg" alt="Envision logo" width="128" height="128">
 </p>
@@ -59,6 +58,7 @@ Each finding carries:
 | **Accounts** | Duplicate UID‑0 (root‑equivalent) accounts; empty‑password accounts in `/etc/shadow` |
 | **Filesystem** | World‑writable files in system directories; full SUID‑binary inventory |
 | **Kernel** | Hardening sysctls — ASLR, `rp_filter`, `tcp_syncookies`, `accept_redirects`, `kptr_restrict`, SUID core dumps |
+| **Kernel (extra)** | Further hardening sysctls — `dmesg_restrict`, Yama `ptrace_scope`, `kexec_load_disabled`, `unprivileged_bpf_disabled`, `sysrq`, `protected_hardlinks`/`protected_symlinks`, `send_redirects`, `accept_source_route`, `log_martians` |
 | **Storage** | Disk encryption (LUKS/dm‑crypt) presence |
 | **Services** | Failed `systemd` units |
 | **Hardening** | Mandatory Access Control — SELinux/AppArmor present and **enforcing** |
@@ -73,6 +73,13 @@ Each finding carries:
 | **Updates (reboot)** | Pending reboot, or a newer kernel installed but not yet running |
 | **Boot** | UEFI **Secure Boot** state (signed‑boot chain) |
 | **Filesystem (`/tmp`)** | `/tmp` as a separate mount with `noexec,nosuid,nodev` to block dropped malware |
+| **Filesystem (mounts)** | `/dev/shm` and `/var/tmp` — the other world-writable mounts — also hardened with `noexec,nosuid,nodev` |
+| **Filesystem (perms)** | Permissions on credential/policy files (`/etc/shadow`, `gshadow`, `passwd`, `group`, `sudoers`) are not over-permissive |
+| **Filesystem (unowned)** | Files owned by a deleted user/group (`-nouser`/`-nogroup`) that a re-used UID could silently inherit |
+| **SSH (extra)** | `PermitEmptyPasswords`, `X11Forwarding` in addition to root-login and password auth |
+| **Accounts (lockout)** | Account-lockout after failed logins via `pam_faillock` / `pam_tally` |
+| **Services (legacy)** | Cleartext/legacy services installed (telnet, rsh, FTP, TFTP, NIS, finger, inetd) |
+| **Boot (GRUB)** | A GRUB superuser password so console boot parameters can't be edited to bypass login |
 
 The check set is intentionally extensible — new checks are a single function in
 `src/scan.cpp`. Even on a clean system, Envision keeps checking for the *bad*
