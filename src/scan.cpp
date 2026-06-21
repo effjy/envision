@@ -519,6 +519,426 @@ static void check_coredumps(ScanReport *r) {
     g_free(v);
 }
 
+/* Mandatory Access Control: AppArmor or SELinux in enforcing mode confines
+ * services so a compromised process cannot freely touch the rest of the system. */
+static void check_mac(ScanReport *r) {
+    /* SELinux first (Fedora/RHEL/CentOS). */
+    if (g_file_test("/sys/fs/selinux/enforce", G_FILE_TEST_EXISTS) ||
+        have_cmd("getenforce")) {
+        char *out = run_cmd("getenforce 2>/dev/null");
+        char *s = chomp_dup(out); g_free(out);
+        if (g_ascii_strcasecmp(s, "Enforcing") == 0) {
+            add_finding(r, "Hardening", "SELinux is enforcing", SEV_OK,
+                        "SELinux is in enforcing mode.", "", NULL);
+        } else if (g_ascii_strcasecmp(s, "Permissive") == 0) {
+            add_finding(r, "Hardening", "SELinux is only permissive", SEV_MEDIUM,
+                        "SELinux is loaded but in permissive mode: it logs "
+                        "violations but does not block them.",
+                        "Switch SELinux to enforcing once you have confirmed no "
+                        "legitimate service is being denied.",
+                        "sudo setenforce 1 && sudo sed -i "
+                        "'s/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config");
+        } else if (g_ascii_strcasecmp(s, "Disabled") == 0) {
+            add_finding(r, "Hardening", "SELinux is disabled", SEV_MEDIUM,
+                        "SELinux is present but disabled.",
+                        "Enable SELinux in enforcing mode for defence-in-depth "
+                        "confinement of services.",
+                        "sudo sed -i 's/^SELINUX=.*/SELINUX=enforcing/' "
+                        "/etc/selinux/config   # then reboot");
+        }
+        g_free(s);
+        return;
+    }
+    /* AppArmor (Debian/Ubuntu/SUSE). */
+    if (have_cmd("aa-status") || g_file_test("/sys/module/apparmor",
+                                             G_FILE_TEST_IS_DIR)) {
+        char *out = run_cmd("aa-status --enabled 2>/dev/null; echo $?");
+        char *s = chomp_dup(out); g_free(out);
+        gboolean enabled = (s && g_str_has_suffix(s, "0"));
+        g_free(s);
+        if (enabled) {
+            char *prof = run_cmd("aa-status 2>/dev/null | "
+                                 "grep -oE '[0-9]+ profiles are in enforce' "
+                                 "| grep -oE '^[0-9]+'");
+            char *p = chomp_dup(prof); g_free(prof);
+            char d[160];
+            g_snprintf(d, sizeof d, "AppArmor is enabled%s%s.",
+                       (p && *p) ? " with " : "", (p && *p) ? p : "");
+            add_finding(r, "Hardening", "AppArmor is enabled", SEV_OK, d, "", NULL);
+            g_free(p);
+        } else {
+            add_finding(r, "Hardening", "AppArmor present but not enabled",
+                        SEV_MEDIUM, "The AppArmor module is available but no "
+                        "profiles are being enforced.",
+                        "Enable AppArmor so packaged service profiles confine "
+                        "daemons such as the browser, CUPS and MySQL.",
+                        "sudo systemctl enable --now apparmor");
+        }
+        return;
+    }
+    add_finding(r, "Hardening", "No Mandatory Access Control system", SEV_MEDIUM,
+                "Neither SELinux nor AppArmor was detected.",
+                "Install a MAC framework (AppArmor on Debian/Ubuntu, SELinux on "
+                "RHEL-family) so that a compromised service is confined rather "
+                "than able to touch the whole system.",
+                "sudo apt-get install -y apparmor apparmor-profiles "
+                "&& sudo systemctl enable --now apparmor");
+}
+
+/* Brute-force protection: fail2ban (or sshguard) bans IPs after repeated
+ * failed logins. Especially important on any host exposing SSH. */
+static void check_intrusion_prevention(ScanReport *r) {
+    gboolean f2b = have_cmd("fail2ban-client") ||
+                   g_file_test("/etc/fail2ban/jail.conf", G_FILE_TEST_EXISTS);
+    gboolean sg  = have_cmd("sshguard");
+    if (!f2b && !sg) {
+        add_finding(r, "Intrusion prevention",
+                    "No brute-force protection (fail2ban/sshguard)", SEV_MEDIUM,
+                    "Neither fail2ban nor sshguard is installed.",
+                    "Install fail2ban to automatically ban hosts that hammer SSH "
+                    "or other services with failed logins. This is one of the "
+                    "highest-value defences for any internet-facing machine.",
+                    "sudo apt-get install -y fail2ban "
+                    "&& sudo systemctl enable --now fail2ban");
+        return;
+    }
+    if (f2b) {
+        char *out = run_cmd("systemctl is-active fail2ban 2>/dev/null");
+        char *s = chomp_dup(out); g_free(out);
+        if (g_str_equal(s, "active")) {
+            add_finding(r, "Intrusion prevention", "fail2ban is active", SEV_OK,
+                        "fail2ban is installed and running.", "", NULL);
+        } else {
+            add_finding(r, "Intrusion prevention",
+                        "fail2ban installed but not running", SEV_MEDIUM,
+                        "The fail2ban package is present but the service is not "
+                        "active.",
+                        "Start and enable fail2ban so its jails actually ban "
+                        "abusive hosts.",
+                        "sudo systemctl enable --now fail2ban");
+        }
+        g_free(s);
+    } else {
+        add_finding(r, "Intrusion prevention", "sshguard present", SEV_OK,
+                    "sshguard is installed to throttle brute-force logins.",
+                    "", NULL);
+    }
+}
+
+/* Malware / rootkit tooling: not a real-time scan, just whether the box has any
+ * means to detect known malware or rootkits. */
+static void check_malware_tools(ScanReport *r) {
+    gboolean clam = have_cmd("clamscan") || have_cmd("clamdscan");
+    gboolean rk   = have_cmd("rkhunter") || have_cmd("chkrootkit");
+    if (clam || rk) {
+        char d[160];
+        g_snprintf(d, sizeof d, "Detected:%s%s.",
+                   clam ? " ClamAV" : "", rk ? " rootkit checker" : "");
+        add_finding(r, "Malware", "Malware/rootkit tooling present", SEV_OK,
+                    d, "", NULL);
+        return;
+    }
+    add_finding(r, "Malware", "No malware or rootkit scanner installed", SEV_LOW,
+                "Neither an antivirus (ClamAV) nor a rootkit checker "
+                "(rkhunter/chkrootkit) is installed.",
+                "On a server, install rkhunter to baseline the system and detect "
+                "known rootkits; on a host that exchanges files with Windows "
+                "machines, ClamAV is useful for scanning shared content. Schedule "
+                "periodic scans rather than relying on real-time protection.",
+                "sudo apt-get install -y rkhunter && sudo rkhunter --propupd "
+                "&& sudo rkhunter --check --sk");
+}
+
+/* Audit logging: auditd records security-relevant events (logins, privilege
+ * use, file access) needed for forensics after an incident. */
+static void check_auditd(ScanReport *r) {
+    gboolean installed = have_cmd("auditctl") ||
+                         g_file_test("/etc/audit/auditd.conf", G_FILE_TEST_EXISTS);
+    if (!installed) {
+        add_finding(r, "Logging", "Audit daemon (auditd) not installed", SEV_LOW,
+                    "The Linux audit framework is not installed.",
+                    "On a server, install auditd so that logins, privilege "
+                    "escalation and changes to sensitive files are recorded — "
+                    "without it there is little forensic trail after a breach.",
+                    "sudo apt-get install -y auditd && sudo systemctl enable "
+                    "--now auditd");
+        return;
+    }
+    char *out = run_cmd("systemctl is-active auditd 2>/dev/null");
+    char *s = chomp_dup(out); g_free(out);
+    if (g_str_equal(s, "active"))
+        add_finding(r, "Logging", "Audit daemon is running", SEV_OK,
+                    "auditd is active and recording security events.", "", NULL);
+    else
+        add_finding(r, "Logging", "Audit daemon installed but not running",
+                    SEV_LOW, "auditd is present but not active.",
+                    "Start and enable auditd to retain a security audit trail.",
+                    "sudo systemctl enable --now auditd");
+    g_free(s);
+}
+
+/* Accurate time matters for log correlation, TLS certificate validation,
+ * Kerberos/2FA and detecting replay. Check that an NTP client is syncing. */
+static void check_time_sync(ScanReport *r) {
+    if (have_cmd("timedatectl")) {
+        char *out = run_cmd("timedatectl show -p NTPSynchronized --value 2>/dev/null");
+        char *s = chomp_dup(out); g_free(out);
+        if (g_str_equal(s, "yes")) {
+            add_finding(r, "Time", "Clock is synchronised (NTP)", SEV_OK,
+                        "The system clock is synchronised to a time source.",
+                        "", NULL);
+            g_free(s);
+            return;
+        }
+        g_free(s);
+        add_finding(r, "Time", "System clock not synchronised", SEV_LOW,
+                    "timedatectl reports the clock is not NTP-synchronised.",
+                    "Enable network time synchronisation. A drifting clock breaks "
+                    "TLS certificate checks, log correlation and time-based "
+                    "authentication.",
+                    "sudo timedatectl set-ntp true");
+        return;
+    }
+    gboolean any = have_cmd("chronyd") || have_cmd("ntpd") ||
+                   g_file_test("/etc/chrony/chrony.conf", G_FILE_TEST_EXISTS);
+    if (!any)
+        add_finding(r, "Time", "No time-synchronisation client", SEV_LOW,
+                    "No NTP client (systemd-timesyncd, chrony or ntpd) was found.",
+                    "Install and enable a time client so the clock stays accurate.",
+                    "sudo apt-get install -y chrony && sudo systemctl enable "
+                    "--now chrony");
+}
+
+/* Password aging / strength policy from /etc/login.defs. Weak defaults let a
+ * leaked password stay valid forever. */
+static void check_password_policy(ScanReport *r) {
+    if (!g_file_test("/etc/login.defs", G_FILE_TEST_EXISTS)) return;
+    char *out = run_cmd("awk '/^PASS_MAX_DAYS/{print $2}' /etc/login.defs "
+                        "2>/dev/null | head -1");
+    char *s = chomp_dup(out); g_free(out);
+    if (s && *s) {
+        int maxd = atoi(s);
+        if (maxd <= 0 || maxd > 365) {
+            char d[200];
+            g_snprintf(d, sizeof d, "PASS_MAX_DAYS is %s; passwords effectively "
+                       "never expire.", s);
+            add_finding(r, "Accounts", "No password-expiry policy", SEV_LOW, d,
+                        "Set a reasonable maximum password age (e.g. 365 days) in "
+                        "/etc/login.defs so that long-lived credentials are "
+                        "rotated. On a personal single-user laptop this matters "
+                        "less; on a multi-user server it is important.",
+                        "sudo sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS 365/' "
+                        "/etc/login.defs");
+        } else {
+            add_finding(r, "Accounts", "Password-expiry policy configured",
+                        SEV_OK, "PASS_MAX_DAYS is set to a finite value.", "",
+                        NULL);
+        }
+    }
+    g_free(s);
+    /* Is a password-quality module enforced at all? */
+    gboolean pq = g_file_test("/usr/lib/x86_64-linux-gnu/security/pam_pwquality.so",
+                              G_FILE_TEST_EXISTS) ||
+                  g_file_test("/lib/x86_64-linux-gnu/security/pam_pwquality.so",
+                              G_FILE_TEST_EXISTS) ||
+                  have_cmd("pwscore");
+    if (!pq)
+        add_finding(r, "Accounts", "No password-strength enforcement (pwquality)",
+                    SEV_LOW, "The pam_pwquality module does not appear to be "
+                    "installed, so weak passwords can be set without complaint.",
+                    "Install libpam-pwquality to reject trivially weak passwords "
+                    "when they are created or changed.",
+                    "sudo apt-get install -y libpam-pwquality");
+}
+
+/* Automatic login / autologin in the display manager hands a powered-on machine
+ * straight to a desktop session with no authentication. */
+static void check_autologin(ScanReport *r) {
+    char *out = run_cmd(
+        "grep -riEl '^[^#]*autologin-user[[:space:]]*=[[:space:]]*[^[:space:]]|"
+        "^[^#]*AutomaticLogin[[:space:]]*=[[:space:]]*[^[:space:]]' "
+        "/etc/lightdm /etc/gdm3 /etc/gdm /etc/sddm.conf /etc/sddm.conf.d "
+        "2>/dev/null");
+    char *s = chomp_dup(out); g_free(out);
+    if (s && *s) {
+        char d[512];
+        g_snprintf(d, sizeof d, "Autologin appears to be configured in:\n%s", s);
+        add_finding(r, "Login", "Automatic graphical login enabled", SEV_MEDIUM,
+                    d,
+                    "Autologin means anyone who powers on or reboots this machine "
+                    "reaches a full desktop session with no password. Disable it "
+                    "unless this is a kiosk or appliance where that is intended; "
+                    "combine with full-disk encryption if data matters.",
+                    "Edit the listed file(s) and remove the autologin-user / "
+                    "AutomaticLogin lines, then reboot.");
+    } else {
+        add_finding(r, "Login", "No automatic-login configured", SEV_OK,
+                    "No display-manager autologin entries were found.", "", NULL);
+    }
+    g_free(s);
+}
+
+/* Scheduled tasks are a classic persistence mechanism. Flag world-writable cron
+ * files/dirs, which would let any user alter what runs (often as root). */
+static void check_cron(ScanReport *r) {
+    char *out = run_cmd("find /etc/crontab /etc/cron.d /etc/cron.daily "
+                        "/etc/cron.hourly /etc/cron.weekly /etc/cron.monthly "
+                        "/var/spool/cron -perm -0002 2>/dev/null | head -20");
+    char *s = chomp_dup(out); g_free(out);
+    if (s && *s) {
+        add_finding(r, "Scheduled tasks", "World-writable cron files", SEV_HIGH,
+                    s,
+                    "Any local user can edit these scheduled tasks, which "
+                    "typically run as root — a direct path to privilege "
+                    "escalation and persistence. Remove the world-writable bit.",
+                    "sudo chmod o-w <path>");
+    } else {
+        add_finding(r, "Scheduled tasks", "Cron files not world-writable", SEV_OK,
+                    "No world-writable cron jobs were found.", "", NULL);
+    }
+    g_free(s);
+}
+
+/* An exposed/over-privileged container runtime is effectively root access.
+ * Membership of the docker group, or a world-accessible docker socket, both
+ * grant trivial host root. */
+static void check_docker(ScanReport *r) {
+    if (!g_file_test("/var/run/docker.sock", G_FILE_TEST_EXISTS) &&
+        !have_cmd("docker"))
+        return;
+    /* Non-root users in the docker group can escalate to root via `docker run`. */
+    char *grp = run_cmd("getent group docker 2>/dev/null | cut -d: -f4");
+    char *g = chomp_dup(grp); g_free(grp);
+    if (g && *g) {
+        char d[256];
+        g_snprintf(d, sizeof d, "Members of the docker group: %s", g);
+        add_finding(r, "Containers", "Users in docker group (root-equivalent)",
+                    SEV_MEDIUM, d,
+                    "Anyone in the docker group can mount the host filesystem "
+                    "inside a container and become root — it is equivalent to "
+                    "passwordless sudo. Only grant it to trusted admins, or use "
+                    "rootless Docker / Podman instead.",
+                    "sudo gpasswd -d <user> docker   # remove unneeded members");
+    }
+    g_free(g);
+    /* Socket exposed over TCP without TLS is remote root for the network. */
+    char *tcp = run_cmd("ss -tlnH 2>/dev/null | grep -E ':2375( |$)'");
+    char *t = chomp_dup(tcp); g_free(tcp);
+    if (t && *t) {
+        add_finding(r, "Containers", "Docker API exposed on TCP 2375 (no TLS)",
+                    SEV_CRITICAL, t,
+                    "An unauthenticated Docker daemon on port 2375 gives anyone "
+                    "who can reach it full root on this host. Disable the TCP "
+                    "listener or protect it with mutual TLS on 2376.",
+                    "Remove '-H tcp://0.0.0.0:2375' from the docker daemon options "
+                    "and restart docker.");
+    }
+    g_free(t);
+}
+
+/* A kernel/library update that requires a reboot leaves the running system on
+ * the old, potentially-vulnerable code until it is restarted. */
+static void check_reboot_required(ScanReport *r) {
+    if (g_file_test("/var/run/reboot-required", G_FILE_TEST_EXISTS) ||
+        g_file_test("/run/reboot-required", G_FILE_TEST_EXISTS)) {
+        char *who = run_cmd("cat /var/run/reboot-required.pkgs 2>/dev/null "
+                            "/run/reboot-required.pkgs 2>/dev/null | sort -u "
+                            "| tr '\\n' ' '");
+        char *w = chomp_dup(who); g_free(who);
+        char d[512];
+        g_snprintf(d, sizeof d, "A reboot is required to finish applying "
+                   "updates.%s%s", (w && *w) ? " Packages: " : "", (w && *w) ? w : "");
+        add_finding(r, "Updates", "Reboot required to apply updates", SEV_MEDIUM,
+                    d,
+                    "Updated packages (often the kernel or core libraries) only "
+                    "take effect after a reboot; until then the old, possibly "
+                    "vulnerable code keeps running. Schedule a reboot.",
+                    "sudo reboot");
+        g_free(w);
+        return;
+    }
+    /* Fallback: compare the running kernel to the newest installed one. */
+    char *running = run_cmd("uname -r");
+    char *latest  = run_cmd("ls -1 /boot/vmlinuz-* 2>/dev/null | sed "
+                            "'s#.*/vmlinuz-##' | sort -V | tail -1");
+    char *run = chomp_dup(running); g_free(running);
+    char *lat = chomp_dup(latest);  g_free(latest);
+    if (run && *run && lat && *lat && !g_str_equal(run, lat)) {
+        char d[256];
+        g_snprintf(d, sizeof d, "Running kernel %s, but %s is installed.",
+                   run, lat);
+        add_finding(r, "Updates", "Newer kernel installed but not running",
+                    SEV_MEDIUM, d,
+                    "A newer kernel is installed but the system is still running "
+                    "the old one. Reboot to run the patched kernel.",
+                    "sudo reboot");
+    }
+    g_free(run); g_free(lat);
+}
+
+/* UEFI Secure Boot verifies the bootloader/kernel signature and is a baseline
+ * defence against boot-level (pre-OS) tampering and bootkits. */
+static void check_secure_boot(ScanReport *r) {
+    if (!g_file_test("/sys/firmware/efi", G_FILE_TEST_IS_DIR))
+        return; /* Legacy BIOS boot — Secure Boot not applicable. */
+    char *out = NULL;
+    if (have_cmd("mokutil"))
+        out = run_cmd("mokutil --sb-state 2>/dev/null");
+    if (!out || !*out) {
+        g_free(out);
+        out = run_cmd("od -An -t u1 "
+                      "/sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null "
+                      "| awk '{print $NF}'");
+    }
+    char *s = chomp_dup(out); g_free(out);
+    if (!s || !*s) { g_free(s); return; }
+    gboolean enabled = g_strstr_len(s, -1, "enabled") || g_str_has_suffix(s, "1");
+    if (enabled)
+        add_finding(r, "Boot", "UEFI Secure Boot enabled", SEV_OK,
+                    "Secure Boot is enabled.", "", NULL);
+    else
+        add_finding(r, "Boot", "UEFI Secure Boot disabled", SEV_LOW,
+                    "The system boots via UEFI but Secure Boot is off.",
+                    "Enable Secure Boot in firmware so only signed bootloaders "
+                    "and kernels run, reducing the risk of bootkits. Verify your "
+                    "distribution supports it before enabling.",
+                    "Enable Secure Boot from the UEFI/BIOS setup screen.");
+    g_free(s);
+}
+
+/* /tmp is world-writable by design; mounting it with noexec/nosuid/nodev (ideally
+ * as its own filesystem) blocks a common spot for dropping and running malware. */
+static void check_tmp_hardening(ScanReport *r) {
+    char *out = run_cmd("findmnt -no OPTIONS /tmp 2>/dev/null");
+    char *s = chomp_dup(out); g_free(out);
+    if (!s || !*s) {
+        g_free(s);
+        add_finding(r, "Filesystem", "/tmp is not a separate mount", SEV_LOW,
+                    "/tmp is part of the root filesystem rather than its own "
+                    "mount, so noexec/nosuid cannot be applied to it.",
+                    "Consider a dedicated /tmp (or systemd tmp.mount) with "
+                    "noexec,nosuid,nodev so that files dropped in this "
+                    "world-writable directory cannot be executed.",
+                    NULL);
+        return;
+    }
+    gboolean noexec = g_strstr_len(s, -1, "noexec") != NULL;
+    gboolean nosuid = g_strstr_len(s, -1, "nosuid") != NULL;
+    if (noexec && nosuid) {
+        add_finding(r, "Filesystem", "/tmp mounted with noexec,nosuid", SEV_OK,
+                    "/tmp is hardened against executing dropped files.", "", NULL);
+    } else {
+        add_finding(r, "Filesystem", "/tmp missing noexec/nosuid", SEV_LOW,
+                    s,
+                    "Add noexec,nosuid,nodev to the /tmp mount so that malware "
+                    "dropped into this world-writable directory cannot be run "
+                    "directly. /var/tmp and /dev/shm benefit from the same.",
+                    "sudo mount -o remount,noexec,nosuid,nodev /tmp   # and update "
+                    "/etc/fstab to persist");
+    }
+    g_free(s);
+}
+
 /* ------------------------------------------------------------------ */
 /* Orchestration                                                       */
 /* ------------------------------------------------------------------ */
@@ -560,6 +980,18 @@ ScanReport *scan_run(ScanProgressFn progress, gpointer user_data) {
         { "Storage",   check_disk_encryption },
         { "Services",  check_aslr_services },
         { "Core dumps",check_coredumps },
+        { "Access control", check_mac },
+        { "Intrusion prevention", check_intrusion_prevention },
+        { "Malware tooling", check_malware_tools },
+        { "Audit logging", check_auditd },
+        { "Time sync", check_time_sync },
+        { "Password policy", check_password_policy },
+        { "Autologin", check_autologin },
+        { "Scheduled tasks", check_cron },
+        { "Containers", check_docker },
+        { "Reboot required", check_reboot_required },
+        { "Secure Boot", check_secure_boot },
+        { "/tmp hardening", check_tmp_hardening },
     };
     int total = G_N_ELEMENTS(checks);
     for (int i = 0; i < total; i++) {
