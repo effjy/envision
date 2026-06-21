@@ -1,6 +1,5 @@
-<div align="center">
-<a href="https://github.com/effjy/envision/"><img src="titles/envision-title.svg" height="52" alt="Envision"></a>
-</div>
+# Envision
+
 <p align="center">
   <img src="icons/envision.svg" alt="Envision logo" width="128" height="128">
 </p>
@@ -61,6 +60,18 @@ Each finding carries:
 | **Kernel** | Hardening sysctls — ASLR, `rp_filter`, `tcp_syncookies`, `accept_redirects`, `kptr_restrict`, SUID core dumps |
 | **Storage** | Disk encryption (LUKS/dm‑crypt) presence |
 | **Services** | Failed `systemd` units |
+| **Hardening** | Mandatory Access Control — SELinux/AppArmor present and **enforcing** |
+| **Intrusion prevention** | Brute‑force protection via `fail2ban` / `sshguard` (installed and active) |
+| **Malware** | Antivirus / rootkit tooling (`ClamAV`, `rkhunter`, `chkrootkit`) availability |
+| **Logging** | Audit daemon (`auditd`) installed and running for a forensic trail |
+| **Time** | Clock synchronised via NTP (`timedatectl` / `chrony` / `ntpd`) — needed for TLS, logs, 2FA |
+| **Accounts (policy)** | Password expiry (`PASS_MAX_DAYS`) and strength enforcement (`pam_pwquality`) |
+| **Login** | Automatic graphical login in the display manager (LightDM / GDM / SDDM) |
+| **Scheduled tasks** | World‑writable `cron` files/dirs (a persistence & escalation vector) |
+| **Containers** | `docker` group membership (root‑equivalent) and an unauthenticated Docker API on TCP `2375` |
+| **Updates (reboot)** | Pending reboot, or a newer kernel installed but not yet running |
+| **Boot** | UEFI **Secure Boot** state (signed‑boot chain) |
+| **Filesystem (`/tmp`)** | `/tmp` as a separate mount with `noexec,nosuid,nodev` to block dropped malware |
 
 The check set is intentionally extensible — new checks are a single function in
 `src/scan.cpp`. Even on a clean system, Envision keeps checking for the *bad*
@@ -227,9 +238,9 @@ envision/
 Add a new check by writing a `static void check_xxx(ScanReport *r)` function in
 `src/scan.cpp` that calls `add_finding(...)`, then add it to the `checks[]` array
 in `scan_run()`. It will automatically appear in the UI, the text report and
-the PDF. Future ideas: AppArmor/SELinux enforcement, listening‑port → process
-reputation, password‑policy (`pam`) audit, mount options (`nodev`/`nosuid`),
-auditd status, and rootkit scanners.
+the PDF. Future ideas: listening‑port → process reputation, IPv6 exposure,
+USB/removable‑media autorun policy, log‑forwarding / remote syslog, backup
+presence, and per‑service systemd sandboxing (`ProtectSystem`, `NoNewPrivileges`).
 
 ## Security & privacy
 
