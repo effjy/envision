@@ -403,6 +403,10 @@ static void build_ui(App *app) {
     app->window = gtk_application_window_new(app->gapp);
     gtk_window_set_title(GTK_WINDOW(app->window),
                          APP_TITLE " — System Security Scanner");
+    /* Bind the window to its themed icon so it shows up in the window list /
+     * taskbar. Without this GTK has no icon to advertise (the .desktop entry
+     * alone is not enough, especially when running elevated via pkexec). */
+    gtk_window_set_icon_name(GTK_WINDOW(app->window), "envision");
     gtk_window_set_default_size(GTK_WINDOW(app->window), 1100, 680);
 
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
